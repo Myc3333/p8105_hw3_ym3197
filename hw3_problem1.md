@@ -428,6 +428,311 @@ knitr::kable(snow_year_summary, digits = 2)
 | 2009 |      8735 |          25 |      10 |      51 |
 | 2010 |     11590 |          25 |      10 |      43 |
 
+# problem 2
+
+# Data import and cleaning
+
+``` r
+covar_raw =
+  read_csv(
+    "data/nhanes_covar.csv",
+    skip = 4,
+    na = c("", "NA", ".")
+  ) |>
+  rename_with(tolower)
+```
+
+# Each row represents one participant, with min1 through min1440 recording minute-level MIMS activity starting at midnight
+
+``` r
+accel_raw =
+  read_csv(
+    "data/nhanes_accel.csv"
+  ) |>
+  rename_with(tolower)
+```
+
+# Exclude participants with missing demographic information and those younger than 21
+
+``` r
+covar_clean =
+  covar_raw |>
+  drop_na() |>
+  filter(age >= 21) |>
+  mutate(
+    sex = factor(
+      sex,
+      levels = c(1, 2),
+      labels = c("Male", "Female")
+    ),
+    education = factor(
+      education,
+      levels = c(1, 2, 3),
+      labels = c(
+        "Less than high school",
+        "High school equivalent",
+        "More than high school"
+      )
+    )
+  )
+```
+
+# Merge the datasets by participant ID, seqn. The result contains one row per participant, retaining all demographic and minute-level activity variables
+
+``` r
+nhanes_wide =
+  covar_clean |>
+  inner_join(
+    accel_raw,
+    by = "seqn"
+  )
+
+nhanes_wide |>
+  summarize(
+    n_participants = n_distinct(seqn),
+    n_variables = ncol(nhanes_wide)
+  )
+```
+
+    ## # A tibble: 1 × 2
+    ##   n_participants n_variables
+    ##            <int>       <int>
+    ## 1            228        1445
+
+# Reshape the minute columns into minute and mims
+
+``` r
+nhanes_long =
+  nhanes_wide |>
+  pivot_longer(
+    cols = starts_with("min"),
+    names_to = "minute",
+    names_prefix = "min",
+    values_to = "mims"
+  ) |>
+  mutate(
+    minute = as.integer(minute),
+    hour = (minute - 1) / 60
+  )
+```
+
+# Count participants using the one-row-per-participant dataset to avoid counting each person repeatedly
+
+``` r
+participant_table =
+  nhanes_wide |>
+  count(
+    education,
+    sex,
+    name = "n"
+  ) |>
+  pivot_wider(
+    names_from = sex,
+    values_from = n,
+    values_fill = 0
+  )
+
+knitr::kable(
+  participant_table,
+  col.names = c(
+    "Education level",
+    "Male",
+    "Female"
+  ),
+  caption = "Number of participants by education and sex"
+)
+```
+
+| Education level        | Male | Female |
+|:-----------------------|-----:|-------:|
+| Less than high school  |   27 |     28 |
+| High school equivalent |   35 |     23 |
+| More than high school  |   56 |     59 |
+
+Number of participants by education and sex
+
+# Use separate panels for education levels and colors for sex. Density curves compare the shapes of age distributions
+
+``` r
+age_plot =
+  nhanes_wide |>
+  ggplot(
+    aes(
+      x = age,
+      color = sex,
+      fill = sex
+    )
+  ) +
+  geom_density(alpha = 0.2) +
+  facet_wrap(~education, nrow = 1) +
+  labs(
+    title = "Age distributions by education and sex",
+    x = "Age (years)",
+    y = "Density",
+    color = "Sex",
+    fill = "Sex"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom"
+  )
+
+age_plot
+```
+
+![](hw3_problem1_files/figure-gfm/unnamed-chunk-26-1.png)<!-- -->
+
+# median ages by education and sex to support the age comparisons
+
+``` r
+age_summary =
+  nhanes_wide |>
+  group_by(
+    education,
+    sex
+  ) |>
+  summarize(
+    n = n(),
+    median_age = median(age),
+    .groups = "drop"
+  )
+
+knitr::kable(
+  age_summary,
+  digits = 1,
+  col.names = c(
+    "Education level",
+    "Sex",
+    "Participants",
+    "Median age"
+  )
+)
+```
+
+| Education level        | Sex    | Participants | Median age |
+|:-----------------------|:-------|-------------:|-----------:|
+| Less than high school  | Male   |           27 |       60.0 |
+| Less than high school  | Female |           28 |       61.0 |
+| High school equivalent | Male   |           35 |       53.0 |
+| High school equivalent | Female |           23 |       62.0 |
+| More than high school  | Male   |           56 |       43.5 |
+| More than high school  | Female |           59 |       41.0 |
+
+# Sum each participant’s 1,440 minute-level MIMS values
+
+``` r
+total_activity =
+  nhanes_long |>
+  group_by(
+    seqn,
+    sex,
+    age,
+    bmi,
+    education
+  ) |>
+  summarize(
+    total_mims = sum(mims),
+    .groups = "drop"
+  )
+```
+
+# Plot total daily activity against age, with separate education panels and colors for sex. Add LOESS smooth curves to describe trends
+
+``` r
+total_activity_plot =
+  total_activity |>
+  ggplot(
+    aes(
+      x = age,
+      y = total_mims,
+      color = sex
+    )
+  ) +
+  geom_point(
+    alpha = 0.5,
+    size = 1.5
+  ) +
+  geom_smooth(
+    method = "loess",
+    se = FALSE
+  ) +
+  facet_wrap(~education, nrow = 1) +
+  labs(
+    title = "Total daily activity by age, sex, and education",
+    x = "Age (years)",
+    y = "Total daily MIMS",
+    color = "Sex"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom"
+  )
+
+total_activity_plot
+```
+
+![](hw3_problem1_files/figure-gfm/unnamed-chunk-29-1.png)<!-- -->
+
+# Average activity across participants within each education, sex, and minute group to obtain six group-level daily activity profiles
+
+``` r
+activity_by_minute =
+  nhanes_long |>
+  group_by(
+    education,
+    sex,
+    minute,
+    hour
+  ) |>
+  summarize(
+    mean_mims = mean(mims),
+    .groups = "drop"
+  )
+```
+
+# Use three education panels and colors for sex. Faint lines show minute-level group means, and thicker curves show smoothed trends. Shared scales allow comparisons across panels
+
+``` r
+daily_activity_plot =
+  activity_by_minute |>
+  ggplot(
+    aes(
+      x = hour,
+      y = mean_mims,
+      color = sex
+    )
+  ) +
+  geom_line(
+    alpha = 0.25,
+    linewidth = 0.3
+  ) +
+  geom_smooth(
+    method = "loess",
+    span = 0.15,
+    se = FALSE,
+    linewidth = 1
+  ) +
+  facet_wrap(~education, nrow = 1) +
+  scale_x_continuous(
+    breaks = seq(0, 24, by = 4),
+    limits = c(0, 24)
+  ) +
+  labs(
+    title = "Activity patterns over 24 hours",
+    x = "Hours since midnight",
+    y = "Mean minute-level MIMS",
+    color = "Sex"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom"
+  )
+
+daily_activity_plot
+```
+
+![](hw3_problem1_files/figure-gfm/unnamed-chunk-31-1.png)<!-- -->
+
 ## R Markdown
 
 This is an R Markdown document. Markdown is a simple formatting syntax
@@ -437,18 +742,6 @@ using R Markdown see <http://rmarkdown.rstudio.com>.
 When you click the **Knit** button a document will be generated that
 includes both content as well as the output of any embedded R code
 chunks within the document. You can embed an R code chunk like this:
-
-``` r
-summary(cars)
-```
-
-    ##      speed           dist       
-    ##  Min.   : 4.0   Min.   :  2.00  
-    ##  1st Qu.:12.0   1st Qu.: 26.00  
-    ##  Median :15.0   Median : 36.00  
-    ##  Mean   :15.4   Mean   : 42.98  
-    ##  3rd Qu.:19.0   3rd Qu.: 56.00  
-    ##  Max.   :25.0   Max.   :120.00
 
 ## Including Plots
 
